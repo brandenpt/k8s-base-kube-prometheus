@@ -9,7 +9,8 @@ Update the manifests
 $ cd kube-prometheus
 $ git fetch coreos/kube-prometheus
 $ git checkout coreos/kube-prometheus/master -- manifests
-$ cd ..
+$ git commit -m "MESSAGE"
+$ git push origin master
 ```
 
 ### minikube
