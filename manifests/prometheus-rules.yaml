@@ -90,31 +90,31 @@ spec:
   - name: k8s.rules
     rules:
     - expr: |
-        sum(rate(container_cpu_usage_seconds_total{job="kubelet", image!="", container!="POD"}[5m])) by (namespace)
+        sum(rate(container_cpu_usage_seconds_total{job="kubelet", metrics_path="/metrics/cadvisor", image!="", container!="POD"}[5m])) by (namespace)
       record: namespace:container_cpu_usage_seconds_total:sum_rate
     - expr: |
-        sum by (namespace, pod, container) (
-          rate(container_cpu_usage_seconds_total{job="kubelet", image!="", container!="POD"}[5m])
-        ) * on (namespace, pod) group_left(node) max by(namespace, pod, node) (kube_pod_info)
+        sum by (cluster, namespace, pod, container) (
+          rate(container_cpu_usage_seconds_total{job="kubelet", metrics_path="/metrics/cadvisor", image!="", container!="POD"}[5m])
+        ) * on (cluster, namespace, pod) group_left(node) max by(cluster, namespace, pod, node) (kube_pod_info)
       record: node_namespace_pod_container:container_cpu_usage_seconds_total:sum_rate
     - expr: |
-        container_memory_working_set_bytes{job="kubelet", image!=""}
+        container_memory_working_set_bytes{job="kubelet", metrics_path="/metrics/cadvisor", image!=""}
         * on (namespace, pod) group_left(node) max by(namespace, pod, node) (kube_pod_info)
       record: node_namespace_pod_container:container_memory_working_set_bytes
     - expr: |
-        container_memory_rss{job="kubelet", image!=""}
+        container_memory_rss{job="kubelet", metrics_path="/metrics/cadvisor", image!=""}
         * on (namespace, pod) group_left(node) max by(namespace, pod, node) (kube_pod_info)
       record: node_namespace_pod_container:container_memory_rss
     - expr: |
-        container_memory_cache{job="kubelet", image!=""}
+        container_memory_cache{job="kubelet", metrics_path="/metrics/cadvisor", image!=""}
         * on (namespace, pod) group_left(node) max by(namespace, pod, node) (kube_pod_info)
       record: node_namespace_pod_container:container_memory_cache
     - expr: |
-        container_memory_swap{job="kubelet", image!=""}
+        container_memory_swap{job="kubelet", metrics_path="/metrics/cadvisor", image!=""}
         * on (namespace, pod) group_left(node) max by(namespace, pod, node) (kube_pod_info)
       record: node_namespace_pod_container:container_memory_swap
     - expr: |
-        sum(container_memory_usage_bytes{job="kubelet", image!="", container!="POD"}) by (namespace)
+        sum(container_memory_usage_bytes{job="kubelet", metrics_path="/metrics/cadvisor", image!="", container!="POD"}) by (namespace)
       record: namespace:container_memory_usage_bytes:sum
     - expr: |
         sum by (namespace) (
@@ -147,7 +147,7 @@ spec:
             ) * on(replicaset, namespace) group_left(owner_name) kube_replicaset_owner{job="kube-state-metrics"},
             "workload", "$1", "owner_name", "(.*)"
           )
-        ) by (namespace, workload, pod)
+        ) by (cluster, namespace, workload, pod)
       labels:
         workload_type: deployment
       record: mixin_pod_workload
@@ -157,7 +157,7 @@ spec:
             kube_pod_owner{job="kube-state-metrics", owner_kind="DaemonSet"},
             "workload", "$1", "owner_name", "(.*)"
           )
-        ) by (namespace, workload, pod)
+        ) by (cluster, namespace, workload, pod)
       labels:
         workload_type: daemonset
       record: mixin_pod_workload
@@ -167,7 +167,7 @@ spec:
             kube_pod_owner{job="kube-state-metrics", owner_kind="StatefulSet"},
             "workload", "$1", "owner_name", "(.*)"
           )
-        ) by (namespace, workload, pod)
+        ) by (cluster, namespace, workload, pod)
       labels:
         workload_type: statefulset
       record: mixin_pod_workload
@@ -220,13 +220,14 @@ spec:
       record: cluster_quantile:scheduler_binding_duration_seconds:histogram_quantile
   - name: node.rules
     rules:
-    - expr: sum(min(kube_pod_info) by (node))
+    - expr: |
+        sum(min(kube_pod_info) by (cluster, node))
       record: ':kube_pod_info_node_count:'
     - expr: |
         max(label_replace(kube_pod_info{job="kube-state-metrics"}, "pod", "$1", "pod", "(.*)")) by (node, namespace, pod)
       record: 'node_namespace_pod:kube_pod_info:'
     - expr: |
-        count by (node) (sum by (node, cpu) (
+        count by (cluster, node) (sum by (node, cpu) (
           node_cpu_seconds_total{job="node-exporter"}
         * on (namespace, pod) group_left(node)
           node_namespace_pod:kube_pod_info:
@@ -241,7 +242,7 @@ spec:
             node_memory_MemFree_bytes{job="node-exporter"} +
             node_memory_Slab_bytes{job="node-exporter"}
           )
-        )
+        ) by (cluster)
       record: :node_memory_MemAvailable_bytes:sum
   - name: kube-prometheus-node-recording.rules
     rules:
@@ -264,6 +265,12 @@ spec:
     - expr: cluster:node_cpu_seconds_total:rate5m / count(sum(node_cpu_seconds_total)
         BY (instance, cpu))
       record: cluster:node_cpu:ratio
+  - name: kube-prometheus-general.rules
+    rules:
+    - expr: count without(instance, pod, node) (up == 1)
+      record: count:up1
+    - expr: count without(instance, pod, node) (up == 0)
+      record: count:up0
   - name: node-exporter
     rules:
     - alert: NodeFilesystemSpaceFillingUp
@@ -623,7 +630,7 @@ spec:
           /
         sum(kube_node_status_allocatable_cpu_cores)
           >
-        (sum(kube_node_status_allocatable_cpu_cores)-1) / sum(kube_node_status_allocatable_cpu_cores)
+        (count(kube_node_status_allocatable_cpu_cores)-1) / count(kube_node_status_allocatable_cpu_cores)
       for: 5m
       labels:
         severity: warning
@@ -637,9 +644,9 @@ spec:
           /
         sum(kube_node_status_allocatable_memory_bytes)
           >
-        (sum(kube_node_status_allocatable_memory_bytes)-1024*1024*1024)
+        (count(kube_node_status_allocatable_memory_bytes)-1)
           /
-        sum(kube_node_status_allocatable_memory_bytes)
+        count(kube_node_status_allocatable_memory_bytes)
       for: 5m
       labels:
         severity: warning
@@ -703,9 +710,9 @@ spec:
           }} free.
         runbook_url: https://github.com/kubernetes-monitoring/kubernetes-mixin/tree/master/runbook.md#alert-name-kubepersistentvolumeusagecritical
       expr: |
-        kubelet_volume_stats_available_bytes{job="kubelet"}
+        kubelet_volume_stats_available_bytes{job="kubelet", metrics_path="/metrics"}
           /
-        kubelet_volume_stats_capacity_bytes{job="kubelet"}
+        kubelet_volume_stats_capacity_bytes{job="kubelet", metrics_path="/metrics"}
           < 0.03
       for: 1m
       labels:
@@ -718,12 +725,12 @@ spec:
         runbook_url: https://github.com/kubernetes-monitoring/kubernetes-mixin/tree/master/runbook.md#alert-name-kubepersistentvolumefullinfourdays
       expr: |
         (
-          kubelet_volume_stats_available_bytes{job="kubelet"}
+          kubelet_volume_stats_available_bytes{job="kubelet", metrics_path="/metrics"}
             /
-          kubelet_volume_stats_capacity_bytes{job="kubelet"}
+          kubelet_volume_stats_capacity_bytes{job="kubelet", metrics_path="/metrics"}
         ) < 0.15
         and
-        predict_linear(kubelet_volume_stats_available_bytes{job="kubelet"}[6h], 4 * 24 * 3600) < 0
+        predict_linear(kubelet_volume_stats_available_bytes{job="kubelet", metrics_path="/metrics"}[6h], 4 * 24 * 3600) < 0
       for: 1h
       labels:
         severity: critical
@@ -1050,7 +1057,7 @@ spec:
           }} of its Pod capacity.
         runbook_url: https://github.com/kubernetes-monitoring/kubernetes-mixin/tree/master/runbook.md#alert-name-kubelettoomanypods
       expr: |
-        max(max(kubelet_running_pod_count{job="kubelet"}) by(instance) * on(instance) group_left(node) kubelet_node_name{job="kubelet"}) by(node) / max(kube_node_status_capacity_pods{job="kube-state-metrics"}) by(node) > 0.95
+        max(max(kubelet_running_pod_count{job="kubelet", metrics_path="/metrics"}) by(instance) * on(instance) group_left(node) kubelet_node_name{job="kubelet", metrics_path="/metrics"}) by(node) / max(kube_node_status_capacity_pods{job="kube-state-metrics"}) by(node) > 0.95
       for: 15m
       labels:
         severity: warning
@@ -1059,7 +1066,7 @@ spec:
         message: Kubelet has disappeared from Prometheus target discovery.
         runbook_url: https://github.com/kubernetes-monitoring/kubernetes-mixin/tree/master/runbook.md#alert-name-kubeletdown
       expr: |
-        absent(up{job="kubelet"} == 1)
+        absent(up{job="kubelet", metrics_path="/metrics"} == 1)
       for: 15m
       labels:
         severity: critical
@@ -1322,8 +1329,8 @@ spec:
     rules:
     - alert: TargetDown
       annotations:
-        message: '{{ printf "%.4g" $value }}% of the {{ $labels.job }} targets in
-          {{ $labels.namespace }} namespace are down.'
+        message: '{{ printf "%.4g" $value }}% of the {{ $labels.job }}/{{ $labels.service
+          }} targets in {{ $labels.namespace }} namespace are down.'
       expr: 100 * (count(up == 0) BY (job, namespace, service) / count(up) BY (job,
         namespace, service)) > 10
       for: 10m
